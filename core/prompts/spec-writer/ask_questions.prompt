@@ -40,7 +40,7 @@ Important note: don't ask trivial questions for obvious or unimportant parts of 
     * Should the "Hello World" message be static text served directly from the server, or would you like it implemented via JavaScript on the client side?
   * Explanation: There's no need to micromanage the developer(s) and designer(s), the client would've specified these details if they were important.
 
-If you ask such trivial questions, the client will think you're stupid and will leave. DOn'T DO THAT
+If you ask such trivial questions, the client will think you're stupid and will leave. DON'T DO THAT
 
 Think carefully about what a developer must know to be able to build the app. The specification must address all of this information, otherwise the AI software developer will not be able to build the app.
 
@@ -50,7 +50,7 @@ Here's an EXAMPLE initial prompt:
 ---start-of-example-output---
 Online forum similar to Hacker News (news.ycombinator.com), with a simple and clean interface, where people can post links or text posts, and other people can upvote, downvote and comment on. Reading is open to anonymous users, but users must register to post, upvote, downvote or comment. Use simple username+password authentication. The forum should be implemented in Node.js with Express framework, using MongoDB and Mongoose ORM.
 
-The UI should use EJS view engine, Bootstrap for styling and plain vanilla JavaScript. Design should be simple and look like Hacker News, with a top bar for navigation, using a blue color scheme instead of the orange color in HN. The footer in each page should just be "Built using GPT Pilot".
+The UI should use EJS view engine, Bootstrap for styling and plain vanilla JavaScript. Design should be simple and look like Hacker News, with a top bar for navigation, using a blue color scheme instead of the orange color in HN. The footer in each page should just be "Built using Pythagora".
 
 Each story has a title (one-line text), a link (optional, URL to an external article being shared on AI News), and text (text to show in the post). Link and text are mutually exclusive - if the submitter tries to use both, show them an error.
 

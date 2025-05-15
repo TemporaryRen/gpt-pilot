@@ -14,19 +14,28 @@ class AgentUnderTest(BaseAgent):
 @pytest.mark.asyncio
 async def test_send_message():
     ui = MagicMock(spec=UIBase)
-    agent = AgentUnderTest(None, ui)
+    sm = AsyncMock()
+    agent = AgentUnderTest(sm, ui)
 
     await agent.send_message("Hello, world!")
-    ui.send_message.assert_called_once_with("Hello, world!\n", source=agent.ui_source)
+    ui.send_message.assert_called_once_with(
+        "Hello, world!\n",
+        source=agent.ui_source,
+        project_state_id=str(agent.current_state.id),
+        extra_info=None,
+    )
 
 
 @pytest.mark.asyncio
 async def test_stream_handler():
     ui = MagicMock(spec=UIBase)
-    agent = AgentUnderTest(None, ui)
+    sm = AsyncMock()
+    agent = AgentUnderTest(sm, ui)
 
     await agent.stream_handler("chunk")
-    ui.send_stream_chunk.assert_called_once_with("chunk", source=agent.ui_source)
+    ui.send_stream_chunk.assert_called_once_with(
+        "chunk", source=agent.ui_source, project_state_id=str(agent.current_state.id)
+    )
 
 
 @pytest.mark.asyncio
@@ -44,8 +53,13 @@ async def test_ask_question():
         default=None,
         allow_empty=False,
         hint=None,
+        verbose=True,
         initial_text=None,
         source=agent.ui_source,
+        project_state_id=str(agent.current_state.id),
+        full_screen=False,
+        extra_info=None,
+        placeholder=None,
     )
 
     state_manager.log_user_input.assert_awaited_once()
@@ -63,7 +77,7 @@ async def test_get_llm(mock_BaseLLMClient):
     mock_client = AsyncMock(return_value=("response", "log"))
     mock_OpenAIClient.return_value = mock_client
 
-    llm = agent.get_llm()
+    llm = agent.get_llm(stream_output=True)
 
     mock_BaseLLMClient.for_provider.assert_called_once_with("openai")
 

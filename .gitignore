@@ -15,7 +15,10 @@ venv/
 .env
 *.pyc
 *.db
+*.db-shm
+*.db-wal
 config.json
 poetry.lock
 .DS_Store
 *.log
+pythagora-vs-code.vsix

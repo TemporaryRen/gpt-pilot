@@ -50,7 +50,7 @@
 
 </div>
 
-GPT Pilot is the core technology for the [Pythagora VS Code extension](https://bit.ly/3IeZxp6) that aims to provide **the first real AI developer companion**. Not just an autocomplete or a helper for PR messages but rather a real AI developer that can write full features, debug them, talk to you about issues, ask for review, etc.
+GPT Pilot is the core technology for the [Pythagora VS Code extension](https://marketplace.visualstudio.com/items?itemName=PythagoraTechnologies.pythagora-vs-code) that aims to provide **the first real AI developer companion**. Not just an autocomplete or a helper for PR messages but rather a real AI developer that can write full features, debug them, talk to you about issues, ask for review, etc.
 
 ---
 
@@ -97,7 +97,7 @@ If you are interested in our learnings during this project, you can check [our l
 - **Python 3.9+**
 
 # 🚦How to start using gpt-pilot?
-👉 If you are using VS Code as your IDE, the easiest way to start is by downloading [GPT Pilot VS Code extension](https://bit.ly/3IeZxp6). 👈
+👉 If you are using VS Code as your IDE, the easiest way to start is by downloading [GPT Pilot VS Code extension](https://marketplace.visualstudio.com/items?itemName=PythagoraTechnologies.pythagora-vs-code). 👈
 
 Otherwise, you can use the CLI tool.
 
@@ -120,36 +120,9 @@ After you have Python and (optionally) PostgreSQL installed, follow these steps:
 
 All generated code will be stored in the folder `workspace` inside the folder named after the app name you enter upon starting the pilot.
 
-### If you're upgrading from GPT Pilot v0.1
+# 🔎 [Examples](https://github.com/Pythagora-io/gpt-pilot/wiki/Pythagora-App-Lab)
 
-Assuming you already have the git repository with an earlier version:
-
-1. `git pull` (update the repo)
-2. `source pilot-env/bin/activate` (or on Windows `pilot-env\Scripts\activate`) (activate the virtual environment)
-3. `pip install -r requirements.txt` (install the new dependencies)
-4. `python main.py --import-v0 pilot/gpt-pilot` (this should import your settings and existing projects)
-
-This will create a new database `pythagora.db` and import all apps from the old database. For each app,
-it will import the start of the latest task you were working on.
-
-To verify that the import was successful, you can run `python main.py --list` to see all the apps you have created,
-and check `config.json` to check the settings were correctly converted to the new config file format (and make
-any adjustments if needed).
-
-# 🔎 [Examples](https://github.com/Pythagora-io/gpt-pilot/wiki/Apps-created-with-GPT-Pilot)
-
-[Click here](https://github.com/Pythagora-io/gpt-pilot/wiki/Apps-created-with-GPT-Pilot) to see all example apps created with GPT Pilot.
-
-## 🐳 How to start gpt-pilot in docker?
-1. `git clone https://github.com/Pythagora-io/gpt-pilot.git` (clone the repo)
-2. Update the `docker-compose.yml` environment variables, which can be done via `docker compose config`. If you wish to use a local model, please go to [https://localai.io/basics/getting_started/](https://localai.io/basics/getting_started/).
-3. By default, GPT Pilot will read & write to `~/gpt-pilot-workspace` on your machine, you can also edit this in `docker-compose.yml`
-4. run `docker compose build`. this will build a gpt-pilot container for you.
-5. run `docker compose up`.
-6. access the web terminal on `port 7681`
-7. `python main.py` (start GPT Pilot)
-
-This will start two containers, one being a new image built by the `Dockerfile` and a Postgres database. The new image also has [ttyd](https://github.com/tsl0922/ttyd) installed so that you can easily interact with gpt-pilot. Node is also installed on the image and port 3000 is exposed.
+[Click here](https://github.com/Pythagora-io/gpt-pilot/wiki/Pythagora-App-Lab) to see examples of apps created with Pythagora.
 
 ### PostgreSQL support
 
@@ -193,14 +166,6 @@ python main.py --delete <app_id>
 
 Delete project with the specified `app_id`. Warning: this cannot be undone!
 
-### Import projects from v0.1
-
-```bash
-python main.py --import-v0 <path>
-```
-
-This will import projects from the old GPT Pilot v0.1 database. The path should be the path to the old GPT Pilot v0.1 database. For each project, it will import the start of the latest task you were working on. If the project was already imported, the import procedure will skip it (won't overwrite the project in the database).
-
 ### Other command-line options
 
 There are several other command-line options that mostly support calling GPT Pilot from our VSCode extension. To see all the available options, use the `--help` flag:
@@ -241,7 +206,15 @@ Other than the research, GPT Pilot needs to be debugged to work in different sce
 ## 📊 Telemetry
 To improve GPT Pilot, we are tracking some events from which you can opt out at any time. You can read more about it [here](./docs/TELEMETRY.md).
 
-# 🔗 Connect with us
-🌟 As an open-source tool, it would mean the world to us if you starred the GPT-pilot repo 🌟
+# 🔗 Connect with us  
 
-💬 Join [the Discord server](https://discord.gg/HaqXugmxr9) to get in touch.
+🌟 **If you find GPT Pilot useful, please consider [starring the repo](https://github.com/Pythagora-io/gpt-pilot)!** It helps us grow and continue improving the project. 🌟  
+
+💬 **Need help or have questions?**  
+- Join our [Discord community](https://discord.gg/HaqXugmxr9) to connect with other users and our team.  
+- Visit our [Contact Us](https://github.com/Pythagora-io/gpt-pilot/wiki/Contact-Us) page for additional support.  
+
+📖 **Learn more about Pythagora & GPT Pilot:**  
+- Explore our [Wiki](https://github.com/Pythagora-io/gpt-pilot/wiki) for in-depth documentation.  
+- Check out our [FAQ](https://github.com/Pythagora-io/gpt-pilot/wiki/Frequently-Asked-Questions) for common questions and troubleshooting tips.
+- Visit our [YouTube](https://www.youtube.com/@pythagoraa) channel for demos and how-to videos.

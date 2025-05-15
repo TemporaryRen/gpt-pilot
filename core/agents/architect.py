@@ -1,3 +1,4 @@
+import json
 from enum import Enum
 from typing import Any, Optional
 
@@ -16,7 +17,6 @@ from core.templates.registry import (
     PROJECT_TEMPLATES,
     ProjectTemplateEnum,
 )
-from core.ui.base import ProjectStage
 
 ARCHITECTURE_STEP_NAME = "Project architecture"
 WARN_SYSTEM_DEPS = ["docker", "kubernetes", "microservices"]
@@ -97,8 +97,6 @@ class Architect(BaseAgent):
     display_name = "Architect"
 
     async def run(self) -> AgentResponse:
-        await self.ui.send_project_stage(ProjectStage.ARCHITECTURE)
-
         spec = self.current_state.specification.clone()
 
         if spec.example_project:
@@ -137,28 +135,28 @@ class Architect(BaseAgent):
         )
         tpl: TemplateSelection = await llm(convo, parser=JSONParser(TemplateSelection))
         templates = {}
-        if tpl.template:
-            answer = await self.ask_question(
-                f"Do you want to use the '{tpl.template.name}' template?",
-                buttons={"yes": "Yes", "no": "No"},
-                default="yes",
-                buttons_only=True,
-                hint="Project templates are here to speed up start of your app development and save tokens and time.\n"
-                "Choose 'Yes' to use suggested template for your app.\n"
-                "If you choose 'No', project will be created from scratch.",
-            )
-
-            if answer.button == "no":
-                return tpl.architecture, templates
-
-            template_class = PROJECT_TEMPLATES.get(tpl.template)
-            if template_class:
-                options = await self.configure_template(spec, template_class)
-                templates[tpl.template] = template_class(
-                    options,
-                    self.state_manager,
-                    self.process_manager,
-                )
+        # if tpl.template:
+        #     answer = await self.ask_question(
+        #         f"Do you want to use the '{tpl.template.name}' template?",
+        #         buttons={"yes": "Yes", "no": "No"},
+        #         default="yes",
+        #         buttons_only=True,
+        #         hint="Project templates are here to speed up start of your app development and save tokens and time.\n"
+        #         "Choose 'Yes' to use suggested template for your app.\n"
+        #         "If you choose 'No', project will be created from scratch.",
+        #     )
+        #
+        #     if answer.button == "no":
+        #         return tpl.architecture, templates
+        #
+        #     template_class = PROJECT_TEMPLATES.get(tpl.template)
+        #     if template_class:
+        #         options = await self.configure_template(spec, template_class)
+        #         templates[tpl.template] = template_class(
+        #             options,
+        #             self.state_manager,
+        #             self.process_manager,
+        #         )
 
         return tpl.architecture, templates
 
@@ -168,7 +166,7 @@ class Architect(BaseAgent):
 
         await self.send_message("Picking technologies to use ...")
 
-        llm = self.get_llm()
+        llm = self.get_llm(stream_output=True)
         convo = (
             AgentConvo(self)
             .template(
@@ -186,6 +184,7 @@ class Architect(BaseAgent):
         spec.templates = {t.name: t.options_dict for t in templates.values()}
         spec.system_dependencies = [d.model_dump() for d in arch.system_dependencies]
         spec.package_dependencies = [d.model_dump() for d in arch.package_dependencies]
+        telemetry.set("architecture", json.loads(arch.model_dump_json()))
 
     async def check_compatibility(self, arch: Architecture) -> bool:
         warn_system_deps = [dep.name for dep in arch.system_dependencies if dep.name.lower() in WARN_SYSTEM_DEPS]
@@ -247,11 +246,12 @@ class Architect(BaseAgent):
                     remedy = "If you would like to use it locally, please install it before proceeding."
                 await self.send_message(f"❌ {dep['name']} is not available. {remedy}")
                 await self.ask_question(
-                    f"Once you have installed {dep['name']}, please press Continue.",
-                    buttons={"continue": "Continue"},
+                    "",
+                    buttons={"continue": f"I've installed {dep['name']}"},
                     buttons_only=True,
                     default="continue",
                 )
+
             else:
                 await self.send_message(f"✅ {dep['name']} is available.")
 
@@ -271,7 +271,7 @@ class Architect(BaseAgent):
             # If template has no options, no need to ask LLM for anything
             return NoOptions()
 
-        llm = self.get_llm()
+        llm = self.get_llm(stream_output=True)
         convo = (
             AgentConvo(self)
             .template(

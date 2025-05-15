@@ -1,10 +1,16 @@
+import asyncio
 import os.path
+import traceback
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
 
+from sqlalchemy import inspect, select
+from tenacity import retry, stop_after_attempt, wait_fixed
+
 from core.config import FileSystemType, get_config
 from core.db.models import Branch, ExecLog, File, FileContent, LLMRequest, Project, ProjectState, UserInput
-from core.db.models.specification import Specification
+from core.db.models.specification import Complexity, Specification
 from core.db.session import SessionManager
 from core.disk.ignore import IgnoreMatcher
 from core.disk.vfs import LocalDiskVFS, MemoryVFS, VirtualFileSystem
@@ -43,6 +49,21 @@ class StateManager:
         self.current_state = None
         self.next_state = None
         self.current_session = None
+        self.blockDb = False
+        self.git_available = False
+        self.git_used = False
+        self.options = {}
+
+    @asynccontextmanager
+    async def db_blocker(self):
+        while self.blockDb:
+            await asyncio.sleep(0.1)  # Wait if blocked
+
+        try:
+            self.blockDb = True  # Set the block
+            yield
+        finally:
+            self.blockDb = False  # Unset the block
 
     async def list_projects(self) -> list[Project]:
         """
@@ -119,7 +140,7 @@ class StateManager:
 
         The returned ProjectState will have branch and branch.project
         relationships preloaded. All other relationships must be
-        excplicitly loaded using ProjectState.awaitable_attrs or
+        explicitly loaded using ProjectState.awaitable_attrs or
         AsyncSession.refresh.
 
         :param project_id: Project ID (keyword-only, optional).
@@ -179,6 +200,10 @@ class StateManager:
         )
 
         if self.current_state.current_epic and self.current_state.current_task and self.ui:
+            await self.ui.send_epics_and_tasks(
+                self.current_state.current_epic.get("sub_epics"),
+                self.current_state.tasks,
+            )
             source = self.current_state.current_epic.get("source", "app")
             await self.ui.send_task_progress(
                 self.current_state.tasks.index(self.current_state.current_task) + 1,
@@ -190,7 +215,26 @@ class StateManager:
                 self.current_state.tasks,
             )
 
+        telemetry.set(
+            "architecture",
+            {
+                "system_dependencies": self.current_state.specification.system_dependencies,
+                "package_dependencies": self.current_state.specification.package_dependencies,
+            },
+        )
+        telemetry.set("example_project", self.current_state.specification.example_project)
+        telemetry.set("is_complex_app", self.current_state.specification.complexity != Complexity.SIMPLE)
+        telemetry.set("templates", self.current_state.specification.templates)
+
         return self.current_state
+
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
+    async def commit_with_retry(self):
+        try:
+            await self.current_session.commit()
+        except Exception as e:
+            log.error(f"Commit failed: {str(e)}")
+            raise
 
     async def commit(self) -> ProjectState:
         """
@@ -201,35 +245,43 @@ class StateManager:
 
         :return: The committed state.
         """
-        if self.next_state is None:
-            raise ValueError("No state to commit.")
-        if self.current_session is None:
-            raise ValueError("No database session open.")
+        try:
+            if self.next_state is None:
+                raise ValueError("No state to commit.")
+            if self.current_session is None:
+                raise ValueError("No database session open.")
 
-        await self.current_session.commit()
+            log.debug("Committing session")
+            await self.commit_with_retry()
+            log.debug("Session committed successfully")
 
-        # Having a shorter-lived sessions is considered a good practice in SQLAlchemy,
-        # so we close and recreate the session for each state. This uses db
-        # connection from a connection pool, so it is fast. Note that SQLite uses
-        # no connection pool by default because it's all in-process so it's fast anyway.
-        self.current_session.expunge_all()
-        await self.session_manager.close()
-        self.current_session = await self.session_manager.start()
+            # Having a shorter-lived sessions is considered a good practice in SQLAlchemy,
+            # so we close and recreate the session for each state. This uses db
+            # connection from a connection pool, so it is fast. Note that SQLite uses
+            # no connection pool by default because it's all in-process so it's fast anyway.
+            self.current_session.expunge_all()
+            await self.session_manager.close()
+            self.current_session = await self.session_manager.start()
 
-        self.current_state = self.next_state
-        self.current_session.add(self.next_state)
-        self.next_state = await self.current_state.create_next_state()
+            self.current_state = self.next_state
+            self.current_session.add(self.next_state)
+            self.next_state = await self.current_state.create_next_state()
 
-        # After the next_state becomes the current_state, we need to load
-        # the FileContent model, which was previously loaded by the load_project(),
-        # but is not populated by the `create_next_state()`
-        for f in self.current_state.files:
-            await f.awaitable_attrs.content
+            # After the next_state becomes the current_state, we need to load
+            # the FileContent model, which was previously loaded by the load_project(),
+            # but is not populated by the `create_next_state()`
+            for f in self.current_state.files:
+                await f.awaitable_attrs.content
 
-        telemetry.inc("num_steps")
+            telemetry.inc("num_steps")
 
-        # FIXME: write a test to verify files (and file content) are preloaded
-        return self.current_state
+            # FIXME: write a test to verify files (and file content) are preloaded
+            return self.current_state
+
+        except Exception as e:
+            log.error(f"Error during commit: {str(e)}")
+            log.error(traceback.format_exc())
+            raise
 
     async def rollback(self):
         """
@@ -253,12 +305,18 @@ class StateManager:
 
         :param request_log: The request log to log.
         """
-        telemetry.record_llm_request(
-            request_log.prompt_tokens + request_log.completion_tokens,
-            request_log.duration,
-            request_log.status != LLMRequestStatus.SUCCESS,
-        )
-        LLMRequest.from_request_log(self.current_state, agent, request_log)
+        async with self.db_blocker():
+            try:
+                telemetry.record_llm_request(
+                    request_log.prompt_tokens + request_log.completion_tokens,
+                    request_log.duration,
+                    request_log.status != LLMRequestStatus.SUCCESS,
+                )
+                LLMRequest.from_request_log(self.current_state, agent, request_log)
+
+            except Exception as e:
+                if self.ui:
+                    await self.ui.send_message(f"An error occurred: {e}")
 
     async def log_user_input(self, question: str, response: UserInputData):
         """
@@ -309,6 +367,8 @@ class StateManager:
         telemetry.inc("num_tasks")
         if not self.next_state.unfinished_tasks:
             if len(self.current_state.epics) == 1:
+                telemetry.set("end_result", "success:frontend")
+            elif len(self.current_state.epics) == 2:
                 telemetry.set("end_result", "success:initial-project")
             else:
                 telemetry.set("end_result", "success:feature")
@@ -350,11 +410,12 @@ class StateManager:
         self.file_system.save(path, content)
 
         hash = self.file_system.hash_string(content)
-        file_content = await FileContent.store(self.current_session, hash, content)
+        async with self.db_blocker():
+            file_content = await FileContent.store(self.current_session, hash, content)
 
         file = self.next_state.save_file(path, file_content)
-        if self.ui and not from_template:
-            await self.ui.open_editor(self.file_system.get_full_path(path))
+        # if self.ui and not from_template:
+        #     await self.ui.open_editor(self.file_system.get_full_path(path))
         if metadata:
             file.meta = metadata
 
@@ -496,21 +557,197 @@ class StateManager:
 
         return modified_files
 
+    async def get_modified_files_with_content(self) -> list[dict]:
+        """
+        Return a list of new or modified files from the file system,
+        including their paths, old content, and new content.
+
+        :return: List of dictionaries containing paths, old content,
+                and new content for new or modified files.
+        """
+
+        modified_files = []
+        files_in_workspace = self.file_system.list()
+
+        for path in files_in_workspace:
+            content = self.file_system.read(path)
+            saved_file = self.current_state.get_file_by_path(path)
+
+            # If there's a saved file, serialize its content; otherwise, set it to None
+            saved_file_content = saved_file.content.content if saved_file else None
+
+            if saved_file_content == content:
+                continue
+
+            modified_files.append(
+                {
+                    "path": path,
+                    "file_old": saved_file_content,  # Serialized content
+                    "file_new": content,
+                }
+            )
+
+        # Handle files removed from disk
+        await self.current_state.awaitable_attrs.files
+        for db_file in self.current_state.files:
+            if db_file.path not in files_in_workspace:
+                modified_files.append(
+                    {
+                        "path": db_file.path,
+                        "file_old": db_file.content.content,  # Serialized content
+                        "file_new": "",  # Empty string as the file is removed
+                    }
+                )
+
+        return modified_files
+
     def workspace_is_empty(self) -> bool:
         """
         Returns whether the workspace has any files in them or is empty.
         """
         return not bool(self.file_system.list())
 
+    def get_implemented_pages(self) -> list[str]:
+        """
+        Get the list of implemented pages.
+
+        :return: List of implemented pages.
+        """
+        # TODO - use self.current_state plus response from the FE iteration
+        page_files = [file.path for file in self.next_state.files if "client/src/pages" in file.path]
+        return page_files
+
+    async def update_implemented_pages_and_apis(self):
+        modified = False
+        pages = self.get_implemented_pages()
+        apis = await self.get_apis()
+
+        # Get the current state of pages and apis from knowledge_base
+        current_pages = self.next_state.knowledge_base.get("pages", None)
+        current_apis = self.next_state.knowledge_base.get("apis", None)
+
+        # Check if pages or apis have changed
+        if pages != current_pages or apis != current_apis:
+            modified = True
+
+        if modified:
+            self.next_state.knowledge_base["pages"] = pages
+            self.next_state.knowledge_base["apis"] = apis
+            self.next_state.flag_knowledge_base_as_modified()
+            await self.ui.knowledge_base_update(self.next_state.knowledge_base)
+
+    async def update_utility_functions(self, utility_function: dict):
+        """
+        Update the knowledge base with the utility function.
+
+        :param utility_function: Utility function to update.
+        """
+        matched = False
+        for kb_util_func in self.next_state.knowledge_base.get("utility_functions", []):
+            if (
+                utility_function["function_name"] == kb_util_func["function_name"]
+                and utility_function["file"] == kb_util_func["file"]
+            ):
+                kb_util_func["return_value"] = utility_function["return_value"]
+                kb_util_func["input_value"] = utility_function["input_value"]
+                kb_util_func["status"] = utility_function["status"]
+                matched = True
+                self.next_state.flag_knowledge_base_as_modified()
+                break
+
+        if not matched:
+            if "utility_functions" not in self.next_state.knowledge_base:
+                self.next_state.knowledge_base["utility_functions"] = []
+            self.next_state.knowledge_base["utility_functions"].append(utility_function)
+
+        self.next_state.flag_knowledge_base_as_modified()
+        await self.ui.knowledge_base_update(self.next_state.knowledge_base)
+
+    async def get_apis(self) -> list[dict]:
+        """
+        Get the list of APIs.
+
+        :return: List of APIs.
+        """
+        apis = []
+        for file in self.next_state.files:
+            if "client/src/api" not in file.path:
+                continue
+            session = inspect(file).async_session
+            result = await session.execute(select(FileContent).where(FileContent.id == file.content_id))
+            file_content = result.scalar_one_or_none()
+            content = file_content.content
+            lines = content.splitlines()
+            for i, line in enumerate(lines):
+                if "// Description:" in line:
+                    # TODO: Make this better!!!
+                    description = line.split("Description:")[1]
+                    endpoint = lines[i + 1].split("Endpoint:")[1] if len(lines[i + 1].split("Endpoint:")) > 1 else ""
+                    request = lines[i + 2].split("Request:")[1] if len(lines[i + 2].split("Request:")) > 1 else ""
+                    response = lines[i + 3].split("Response:")[1] if len(lines[i + 3].split("Response:")) > 1 else ""
+                    backend = (
+                        next(
+                            (
+                                api
+                                for api in self.current_state.knowledge_base.get("apis", [])
+                                if api["endpoint"] == endpoint.strip()
+                            ),
+                            {},
+                        )
+                        .get("locations", {})
+                        .get("backend", None)
+                    )
+                    apis.append(
+                        {
+                            "description": description.strip(),
+                            "endpoint": endpoint.strip(),
+                            "request": request.strip(),
+                            "response": response.strip(),
+                            "locations": {
+                                "frontend": {
+                                    "path": file.path,
+                                    "line": i - 1,
+                                },
+                                "backend": backend,
+                            },
+                            "status": "implemented" if backend is not None else "mocked",
+                        }
+                    )
+        return apis
+
+    async def update_apis(self, files_with_implemented_apis: list[dict] = []):
+        """
+        Update the list of APIs.
+
+        """
+        apis = await self.get_apis()
+        for file in files_with_implemented_apis:
+            for endpoint in file["related_api_endpoints"]:
+                api = next((api for api in apis if (endpoint in api["endpoint"])), None)
+                if api is not None:
+                    api["status"] = "implemented"
+                    api["locations"]["backend"] = {
+                        "path": file["path"],
+                        "line": file["line"],
+                    }
+        self.next_state.knowledge_base["apis"] = apis
+        self.next_state.flag_knowledge_base_as_modified()
+        await self.ui.knowledge_base_update(self.next_state.knowledge_base)
+
     @staticmethod
-    def get_input_required(content: str) -> list[int]:
+    def get_input_required(content: str, file_path: str) -> list[int]:
         """
         Get the list of lines containing INPUT_REQUIRED keyword.
 
         :param content: The file content to search.
+        :param file_path: The file path.
         :return: Indices of lines with INPUT_REQUIRED keyword, starting from 1.
         """
         lines = []
+
+        if ".env" not in file_path:
+            return lines
+
         for i, line in enumerate(content.splitlines(), start=1):
             if "INPUT_REQUIRED" in line:
                 lines.append(i)
